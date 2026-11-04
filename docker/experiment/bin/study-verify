@@ -25,7 +25,7 @@ else
 fi
 
 echo "== repo: $(basename "$PWD") @ $(git rev-parse --abbrev-ref HEAD) =="
-check "tree is clean" '[ -z "$(git status --porcelain)" ]'
+check "tree is clean (ignoring tool logs)" '[ -z "$(git status --porcelain -- . ":!perf" ":!.opencode")" ]'
 check "TASK-README.md present" '[ -f TASK-README.md ]'
 check "README does not point at localhost" '! grep -q "localhost:5173" TASK-README.md'
 check "backend Python 3.12" 'backend/.venv/bin/python -c "import sys;assert sys.version_info[:2]==(3,12)"'
@@ -42,7 +42,12 @@ check "API reachable through the Vite proxy" '[ "$(curl -s -o /dev/null -w "%{ht
 
 if [ "${1:-}" = --live ]; then
   echo "== live model request =="
-  check "Sonnet 5.5 answers through the tool" 'timeout 180 "$TOOL" run "Reply with the single word ready." | grep -qi ready'
+  # In a throwaway repo with its own record, so nothing lands in the participant's capture.
+  scratch=$(mktemp -d)
+  git -C "$scratch" init -q
+  git -C "$scratch" -c user.name=verify -c user.email=verify@study.invalid commit -q --allow-empty -m verify
+  check "Sonnet 5.5 answers through the tool" '(cd "$scratch" && STUDY_RECORD_BASE=$scratch/.record timeout 180 "$TOOL" run "Reply with the single word ready." </dev/null 2>&1) | grep -qi "^ready"'
+  rm -rf "$scratch"
 fi
 echo; echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
