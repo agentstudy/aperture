@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Acceptance checks, run from the repo root. --live also makes one small model request.
+set -uo pipefail
+. /opt/study/bin/study-lib.sh
+. /opt/tool/tool.env
+cd "$(repo_root)"
+pass=0; fail=0
+ok()  { echo "  PASS  $1"; pass=$((pass+1)); }
+bad() { echo "  FAIL  $1"; fail=$((fail+1)); }
+check() { if eval "$2" >/dev/null 2>&1; then ok "$1"; else bad "$1"; fi; }
+
+echo "== tool: $TOOL @ $TOOL_COMMIT =="
+check "ANTHROPIC_API_KEY is set" '[ -n "${ANTHROPIC_API_KEY:-}" ]'
+check "$TOOL command on PATH" 'command -v "$TOOL"'
+check "bun 1.3.14" '[ "$(bun --version)" = 1.3.14 ]'
+check "node 20" 'node --version | grep -q "^v20\."'
+check "tool checkout at recorded commit" '[ "$(git -C /opt/tool rev-parse HEAD)" = "$TOOL_COMMIT" ]'
+if [ "$TOOL" = aperture ]; then
+  check "VSIX present" '[ -f /opt/tool/aperture.vsix ]'
+  check "extension installed" 'ls -d "$HOME"/.vscode-remote/extensions/sst-dev.aperture-* || code --list-extensions | grep -qi aperture'
+  echo "  NOTE  attach path: $(cat "$HOME/.aperture-attach-path" 2>/dev/null || echo 'none yet (no VS Code client has attached)')"
+else
+  check "no Aperture code in the image" '[ ! -e /opt/tool/packages/opencode/src/aperture ] && [ ! -e /opt/tool/aperture.vsix ]'
+  check "no Aperture extension" '! ls -d "$HOME"/.vscode-remote/extensions/sst-dev.aperture-*'
+fi
+
+echo "== repo: $(basename "$PWD") @ $(git rev-parse --abbrev-ref HEAD) =="
+check "tree is clean" '[ -z "$(git status --porcelain)" ]'
+check "TASK-README.md present" '[ -f TASK-README.md ]'
+check "README does not point at localhost" '! grep -q "localhost:5173" TASK-README.md'
+check "backend Python 3.12" 'backend/.venv/bin/python -c "import sys;assert sys.version_info[:2]==(3,12)"'
+check "backend imports" '(cd backend && .venv/bin/python -c "import app.main")'
+check "tests collect" '(cd backend && uv run pytest --collect-only -q)'
+check "demo database seeded" '[ -s backend/app.db ]'
+check "Chromium launches" '(cd frontend && node -e "require(\"@playwright/test\").chromium.launch().then(b=>b.close()).catch(e=>{console.error(e);process.exit(1)})")'
+
+echo "== app =="
+check "API answers on 8000" '[ "$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/products)" != 000 ]'
+check "web app on 5173" '[ "$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5173/)" = 200 ]'
+check "web app accepts the forwarded host" '[ "$(curl -s -o /dev/null -w "%{http_code}" -H "Host: ${CODESPACE_NAME:-x}-5173.app.github.dev" http://localhost:5173/)" = 200 ]'
+check "API reachable through the Vite proxy" '[ "$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5173/api/products)" = 200 ]'
+
+if [ "${1:-}" = --live ]; then
+  echo "== live model request =="
+  check "Sonnet 5.5 answers through the tool" 'timeout 180 "$TOOL" run "Reply with the single word ready." | grep -qi ready'
+fi
+echo; echo "$pass passed, $fail failed"
+[ "$fail" -eq 0 ]

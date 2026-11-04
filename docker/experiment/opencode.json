@@ -1,0 +1,2 @@
+{"$schema":"https://opencode.ai/config.json","model":"anthropic/claude-sonnet-5-5","small_model":"anthropic/claude-haiku-5-5",
+ "agent":{"explore":{"model":"anthropic/claude-haiku-5-5"}},"autoupdate":false,"share":"disabled"}

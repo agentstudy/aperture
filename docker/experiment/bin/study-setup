@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# updateContentCommand, so it runs at prebuild time: idempotent, no ANTHROPIC_API_KEY.
+# NEVER exits non-zero: a failing hook makes Codespaces destroy the container and substitute a
+# bare recovery container (error 1302). study-verify is the gate instead.
+set -uo pipefail
+problems=0
+warn() { echo "SETUP PROBLEM: $*" >&2; problems=$((problems + 1)); }
+make setup || warn "make setup failed"
+make reset-db || warn "make reset-db failed"
+[ "$problems" -eq 0 ] || echo "setup finished with $problems problem(s); run study-verify" >&2
+exit 0

@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# `aperture` / `opencode`: launch the condition's tool the way pilot.sh does.
+#   aperture [dir]          the TUI on a directory (default: the repo you are in)
+#   opencode run "prompt"   any non-directory first argument is passed to the CLI unchanged
+set -euo pipefail
+. /opt/study/bin/study-lib.sh
+. /opt/tool/tool.env
+
+args=()
+if [ "$#" -eq 0 ] || [ -d "$1" ]; then
+  target=$(realpath "${1:-$(repo_root)}")
+  [ "$#" -gt 0 ] && shift
+  args+=("$target")
+  [ "$TOOL" = aperture ] && args+=(--port 4096)
+else
+  target=$(repo_root)
+fi
+
+rec=$(record_dir "$(basename "$target")")
+mkdir -p "$rec/data"
+if [ ! -f "$rec/session.env" ]; then
+  {
+    echo "tool=$TOOL"
+    echo "tool_commit=$TOOL_COMMIT"
+    echo "repo=$target"
+    echo "repo_start_commit=$(git -C "$target" rev-parse HEAD)"
+    echo "branch=$(git -C "$target" rev-parse --abbrev-ref HEAD)"
+    echo "codespace=${CODESPACE_NAME:-}"
+    echo "github_user=${GITHUB_USER:-}"
+    echo "model=$(python3 -c 'import json;print(json.load(open("/opt/study/opencode.json"))["model"])')"
+    echo "small_model=$(python3 -c 'import json;print(json.load(open("/opt/study/opencode.json"))["small_model"])')"
+    echo "started=$(date -Is)"
+  } > "$rec/session.env"
+fi
+echo "launch=$(date -Is)" >> "$rec/session.env"
+
+export XDG_DATA_HOME=$rec/data OPENCODE_CONFIG=/opt/study/opencode.json
+if [ -x "$target/backend/.venv/bin/python" ]; then
+  export VIRTUAL_ENV=$target/backend/.venv PATH=$target/backend/.venv/bin:$PATH
+fi
+cd "$target"
+exec bun run --cwd /opt/tool/packages/opencode --conditions=browser src/index.ts "${args[@]}" "$@"

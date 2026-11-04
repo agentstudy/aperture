@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Last step of a session: study-capture p03
+# Pushes branch participant-<id> with two commits, like pilot.sh finish: the participant's work, then
+# the artifacts (perf/, .opencode/, and .study-capture/ holding the OpenCode DB, logs and session
+# record). The DB is the ONLY transcript in the baseline condition. Quit the tool first.
+set -euo pipefail
+. /opt/study/bin/study-lib.sh
+. /opt/tool/tool.env
+die() { echo "ERROR: $*" >&2; exit 1; }
+
+id=${1:-}
+[[ "$id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "usage: study-capture <participant-id>, e.g. p03"
+if pgrep -f '/opt/tool/packages/opencode|src/index\.ts' >/dev/null; then
+  die "the tool is still running. Quit it (Ctrl+C or /exit), then run this again."
+fi
+
+repo=$(repo_root); cd "$repo"
+rec=$(record_dir "$(basename "$repo")")
+branch=participant-$id
+cur=$(git rev-parse --abbrev-ref HEAD)
+if [ "$cur" != "$branch" ]; then
+  git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1 \
+    && die "$branch already exists on the remote; use a different id or check it first"
+  git switch -q -c "$branch"
+fi
+
+pid=$(cat "$rec/dev-server.pid" 2>/dev/null || true)
+if [ -n "$pid" ]; then kill -TERM -- "-$pid" 2>/dev/null || true; sleep 2; kill -KILL -- "-$pid" 2>/dev/null || true; fi
+rm -f "$rec/dev-server.pid"
+
+base=$(sed -n 's/^repo_start_commit=//p' "$rec/session.env" 2>/dev/null || true)
+gc=(git -c user.name="Study Capture" -c user.email="capture@study.invalid")
+git add -A -- . ':!perf' ':!.opencode' ':!.study-capture'
+"${gc[@]}" commit -q --allow-empty -m "$branch: participant work ($(basename "$repo"), $TOOL)"
+[ -n "$base" ] && echo "work: $(git diff --shortstat "$base" HEAD -- . ':!perf' ':!.opencode' ':!.study-capture')"
+
+out=.study-capture; rm -rf "$out"; mkdir -p "$out"
+[ -f "$rec/session.env" ] && { cp "$rec/session.env" "$out/"; echo "finished=$(date -Is)" >> "$out/session.env"; }
+[ -f "$rec/dev-server.log" ] && cp "$rec/dev-server.log" "$out/"
+db=$rec/data/opencode/opencode-local.db
+if [ -f "$db" ]; then
+  # The backup API folds in the -wal file, which can hold a large share of the session.
+  python3 - "$db" "$out/opencode-local.db" <<'PY'
+import sqlite3, sys
+src, dst = sqlite3.connect(sys.argv[1]), sqlite3.connect(sys.argv[2])
+with dst:
+    src.backup(dst)
+print("transcript:", dst.execute("select count(*) from message").fetchone()[0], "messages")
+PY
+  tar -czf "$out/opencode-data.tar.gz" -C "$rec/data/opencode" --exclude='opencode-local.db*' .
+else
+  echo "WARNING: no OpenCode DB at $db, so there is NO TRANSCRIPT in this capture" >&2
+fi
+if [ -n "${ANTHROPIC_API_KEY:-}" ] && grep -rqaF "$ANTHROPIC_API_KEY" "$out" perf .opencode 2>/dev/null; then
+  echo "WARNING: the API key appears in the captured files. Rotate it after this session." >&2
+fi
+git add -A
+"${gc[@]}" commit -q --allow-empty -m "$branch: tool artifacts"
+git push -q -u origin "HEAD:$branch"
+echo "Pushed $branch at $(git rev-parse --short HEAD). Facilitator: fetch and check it before any cleanup."
+git show --stat --format= HEAD | tail -n 12
