@@ -35,7 +35,8 @@ COPY docker/experiment/bin/ /opt/study/bin/
 COPY docker/experiment/opencode.json /opt/study/opencode.json
 RUN chmod 0755 /opt/study/bin/* \
     && ln -s /opt/study/bin/study-capture /usr/local/bin/study-capture \
-    && ln -s /opt/study/bin/study-verify /usr/local/bin/study-verify \
+    && ln -s /opt/study/bin/study-verify /usr/local/bin/study-verify \&& ln -s /opt/study/bin/study-verify /usr/local/bin/study-verify \ ln -s /opt/study/bin/study-verify /usr/local/bin/study-verify \
+    && ln -s /opt/study/bin/study-submit /usr/local/bin/study-submit \
     && mkdir -p /opt/tool && chown vscode:vscode /opt/tool
 
 USER vscode

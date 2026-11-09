@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# The participant's last step: `study-submit`. Closes the tool and the dev server, then runs
+# study-capture with an ID taken from the submission time (UTC), e.g. participant-20261112-143005-utc.
+# Running it again in the same codespace re-pushes to the same branch.
+set -euo pipefail
+. /opt/study/bin/study-lib.sh
+cd "$(repo_root)"
+
+read -r -p "Submit your work now? This closes the coding assistant. [y/N] " answer </dev/tty || answer=
+[[ "$answer" =~ ^[Yy] ]] || { echo "Not submitted."; exit 1; }
+
+pat='/opt/tool/packages/opencode|src/index\.ts'
+if pgrep -f "$pat" >/dev/null; then
+  echo "Closing the coding assistant..."
+  pkill -TERM -f "$pat" || true
+  for _ in $(seq 20); do pgrep -f "$pat" >/dev/null || break; sleep 0.5; done
+  pkill -KILL -f "$pat" 2>/dev/null || true
+  sleep 1
+fi
+
+cur=$(git rev-parse --abbrev-ref HEAD)
+if [[ "$cur" == participant-* ]]; then id=${cur#participant-}; else id=$(date -u +%Y%m%d-%H%M%S)-utc; fi
+if /opt/study/bin/study-capture "$id"; then
+  echo; echo "Submitted. Thank you! You can close this window."
+else
+  echo; echo "SUBMISSION FAILED. Please tell the facilitator and leave this window open." >&2; exit 1
+fi

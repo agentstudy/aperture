@@ -12,7 +12,7 @@ on:
       aperture_sha:
         description: "Full Aperture commit"
         required: true
-        default: c148038c5f7c3d54906f925d0796dc3185bc1b99
+        default: a62f672b0d6701bb00ed79fd9916776f73325802
       baseline_sha:
         description: "Full baseline OpenCode commit"
         required: true

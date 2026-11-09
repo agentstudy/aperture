@@ -1,2 +1,59 @@
-{"$schema":"https://opencode.ai/config.json","model":"anthropic/claude-sonnet-5-5","small_model":"anthropic/claude-haiku-5-5",
- "agent":{"explore":{"model":"anthropic/claude-haiku-5-5"}},"autoupdate":false,"share":"disabled"}
+{
+ "$schema": "https://opencode.ai/config.json",
+ "model": "anthropic/claude-sonnet-5-5",
+ "small_model": "anthropic/claude-haiku-5-5",
+ "agent": {
+  "explore": {
+   "model": "anthropic/claude-haiku-5-5"
+  }
+ },
+ "autoupdate": false,
+ "share": "disabled",
+ "permission": {
+  "bash": {
+   "*": "allow",
+   "git *": "deny",
+   "git status *": "allow",
+   "git diff": "allow",
+   "git diff --stat": "allow",
+   "git diff -- *": "allow",
+   "gh *": "deny",
+   "curl *": "deny",
+   "wget *": "deny",
+   "curl *localhost*": "allow",
+   "curl *127.0.0.1*": "allow",
+   "wget *localhost*": "allow",
+   "wget *127.0.0.1*": "allow",
+   "sudo *": "deny",
+   "chmod -R *": "deny",
+   "chown -R *": "deny",
+   "rm -rf /*": "deny",
+   "rm -rf ~*": "deny",
+   "rm -rf $HOME*": "deny",
+   "rm -rf ..*": "deny",
+   "rm -fr /*": "deny",
+   "rm -fr ~*": "deny",
+   "rm -fr ..*": "deny",
+   "rm -rf /tmp/*": "allow",
+   "sh": "deny",
+   "bash": "deny"
+  },
+  "external_directory": {
+   "/home/vscode/.cache/*": "allow",
+   "/home/vscode/.npm/*": "allow",
+   "/opt/uv-python/*": "allow",
+   "/usr/lib/python3*": "allow",
+   "/usr/include/*": "allow",
+   "/workspaces/backend/*": "allow",
+   "/workspaces/frontend/*": "allow",
+   "/backend/*": "allow",
+   "/frontend/*": "allow"
+  },
+  "edit": {
+   "*": "allow",
+   "../*": "ask"
+  },
+  "webfetch": "deny",
+  "websearch": "deny"
+ }
+}
