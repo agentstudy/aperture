@@ -10,7 +10,7 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 
 id=${1:-}
 [[ "$id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "usage: study-capture <participant-id>, e.g. p03"
-if pgrep -f '/opt/tool/packages/opencode|src/index\.ts' >/dev/null; then
+if pgrep -f "$TOOL_PROC" >/dev/null; then
   die "the tool is still running. Quit it (Ctrl+C or /exit), then run this again."
 fi
 
@@ -54,8 +54,13 @@ fi
 if [ -n "${ANTHROPIC_API_KEY:-}" ] && grep -rqaF "$ANTHROPIC_API_KEY" "$out" perf .opencode 2>/dev/null; then
   echo "WARNING: the API key appears in the captured files. Rotate it after this session." >&2
 fi
+# -f: the task repos ignore *.db, which would silently drop the transcript DB.
 git add -A
+for d in "$out" perf .opencode; do [ -e "$d" ] && git add -f -- "$d"; done
 "${gc[@]}" commit -q --allow-empty -m "$branch: tool artifacts"
+if [ -f "$out/opencode-local.db" ] && ! git cat-file -e "HEAD:$out/opencode-local.db" 2>/dev/null; then
+  die "the transcript DB was not committed; nothing was pushed. Tell the facilitator."
+fi
 git push -q -u origin "HEAD:$branch"
 echo "Pushed $branch at $(git rev-parse --short HEAD). Facilitator: fetch and check it before any cleanup."
 git show --stat --format= HEAD | tail -n 12

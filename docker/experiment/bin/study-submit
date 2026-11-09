@@ -9,7 +9,7 @@ cd "$(repo_root)"
 read -r -p "Submit your work now? This closes the coding assistant. [y/N] " answer </dev/tty || answer=
 [[ "$answer" =~ ^[Yy] ]] || { echo "Not submitted."; exit 1; }
 
-pat='/opt/tool/packages/opencode|src/index\.ts'
+pat=$TOOL_PROC
 if pgrep -f "$pat" >/dev/null; then
   echo "Closing the coding assistant..."
   pkill -TERM -f "$pat" || true
