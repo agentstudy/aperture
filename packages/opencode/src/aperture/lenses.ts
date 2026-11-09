@@ -202,10 +202,12 @@ export interface Lens {
 
 // --- palettes --------------------------------------------------------------
 
-// There are exactly two palettes, and they are the *same six colours* in two orders.
+// There are exactly two palettes, and they are the *same seven colours* in two orders.
 // CATEGORICAL gives each facet a maximally distinct hue for unordered categories;
 // ORDINAL runs the identical set as a cool→warm ramp so a facet's colour encodes its
-// rank (few→many, old→new, low→high). Six colours caps a Lens at MAX_FACETS facets.
+// rank (few→many, old→new, low→high). A Lens still shows at most MAX_FACETS (six) at once:
+// the seventh colour exists so that cyan can be reserved for changes concerns (CHANGES_HUE)
+// without costing an ordinary concern its slot.
 //
 // One set, not seven, because hue *is* the encoding and it has to mean the same thing on
 // every surface — the TUI legend, the VSCode gutter, the Explorer pips, the tree chips.
@@ -271,15 +273,25 @@ export interface Palette {
 // collapse participants reported. lenses.test.ts now guards exactness *and* a minimum
 // pairwise CIEDE2000 across the palette plus both greys.
 //
-// Changing a colour here means re-running `bun sdks/aperture-vscode/script/gen-colors.ts`.
+// The VSCode extension paints the legend's hex as given, so a colour change here needs no
+// change there.
 const CATEGORICAL = [
   "#D7005F", // 161 crimson
   "#AF5F00", // 130 amber
   "#AFAF00", // 142 chartreuse
   "#00875F", //  29 emerald
-  "#00AFD7", //  38 cyan
+  "#00AFD7", //  38 cyan — reserved for the first changes concern (CHANGES_HUE)
   "#5F5FD7", //  62 indigo
+  // Added after the pilots, last so it is the slot ordinary concerns reach only when cyan is
+  // held back. The best remaining cube cell in the L*/C* band: ΔE ≥30.5 from the other six and
+  // both greys, and Lab hue 326°, which extends the ordinal ramp past crimson monotonically.
+  "#FF87FF", // 213 pink
 ] as const
+
+// The light blue every surface uses for "what changed". The first concern made only of changes
+// rules (kind "diff", or a finder narrowed by `changed`) gets it; ordinary concerns never take it
+// while another colour is free, so "light blue = the changes" holds on every Lens.
+export const CHANGES_HUE = "#00AFD7"
 
 // The six hues by name, so a tool can hand an agent a word the user can act on ("the
 // crimson lines") instead of a hex it would have to describe itself. Keyed by exact hex, so
@@ -292,12 +304,13 @@ export const COLOR_NAMES: Record<string, string> = {
   "#00875F": "emerald",
   "#00AFD7": "cyan",
   "#5F5FD7": "indigo",
+  "#FF87FF": "pink",
   [NONE_HUE]: "grey",
   [UNTAGGED_HUE]: "dark grey",
 }
 
 export const PALETTES: Record<PaletteId, Palette> = {
-  // Min pairwise CIEDE2000 among the six = 32.3, and ≥24.5 from either grey. Chosen by
+  // Min pairwise CIEDE2000 among the first six = 32.3 (30.5 with pink), and ≥24.5 from either grey. Chosen by
   // max-min dispersion search over the 216 cube cells, constrained to L* 45-75 and C* 30-75
   // so no colour is so dark it reads as background or so pale it reads as the "Other" grey.
   categorical: {
@@ -306,7 +319,7 @@ export const PALETTES: Record<PaletteId, Palette> = {
     kind: "categorical",
     colors: [...CATEGORICAL],
   },
-  // The same six reversed: Lab hue rotates monotonically 299° → 233° → 163° → 103° → 64° → 8°,
+  // The same seven reversed: Lab hue rotates monotonically 326° → 299° → 233° → 163° → 103° → 64° → 8°,
   // a clean cool→warm ramp, so a facet's *position* in the ramp reads as its rank. Sharing
   // the categorical set keeps the whole product down to eight hexes, which is what lets the
   // VSCode extension contribute one colour id per hue instead of approximating.
@@ -332,13 +345,15 @@ export function isPaletteId(value: unknown): value is PaletteId {
 
 // Give each facet a palette colour, keeping the one it already has. A facet without a usable
 // colour (none yet, not in this palette, or already taken by an earlier facet) gets the lowest
-// free slot. Colour is pinned rather than derived from position because the chat, the legend and
+// free slot — except that CHANGES_HUE is held back for the facets in `changes`: a changes facet
+// takes it when it is free, and an ordinary facet takes it only when nothing else is. Colour is pinned rather than derived from position because the chat, the legend and
 // the gutter all name a concern by its colour: re-hueing the survivors when one is removed would
 // make every earlier "the amber lines" point at a different concern. Facets beyond the palette
 // length wrap (callers enforce MAX_FACETS, but wrapping keeps it total).
 export function assignColors(
   palette: PaletteId,
   facets: ReadonlyArray<Omit<Facet, "color"> & { readonly color?: string }>,
+  changes: ReadonlySet<string> = new Set(),
 ): Facet[] {
   const colors = PALETTES[palette].colors
   const taken = new Set<string>()
@@ -347,27 +362,59 @@ export function assignColors(
     taken.add(facet.color)
     return facet.color
   })
-  const free = colors.filter((c) => !taken.has(c))
-  const unpinned = kept.flatMap((color, i) => (color ? [] : [i]))
-  return facets.map((facet, i) => ({
-    ...facet,
-    color: kept[i] ?? free[unpinned.indexOf(i)] ?? colors[i % colors.length]!,
-  }))
+  // Changes facets choose first so an ordinary facet earlier in the list can't take the reserved hue.
+  const order = facets
+    .map((_, i) => i)
+    .sort((a, b) => Number(changes.has(facets[b]!.id)) - Number(changes.has(facets[a]!.id)))
+  const assigned = new Map<number, string>()
+  for (const i of order) {
+    if (kept[i]) continue
+    const free = colors.filter((c) => !taken.has(c))
+    const preferred = changes.has(facets[i]!.id)
+      ? free.find((c) => c === CHANGES_HUE)
+      : free.find((c) => c !== CHANGES_HUE)
+    const color = preferred ?? free[0] ?? colors[i % colors.length]!
+    taken.add(color)
+    assigned.set(i, color)
+  }
+  return facets.map((facet, i) => ({ ...facet, color: kept[i] ?? assigned.get(i)! }))
 }
 
 // The same slots under another palette — a palette switch re-hues every facet by the slot it
 // holds, which for the two current palettes is "reverse the ramp". Deliberate and user-visible,
-// unlike the silent re-hue a removal used to cause.
+// unlike the silent re-hue a removal used to cause. CHANGES_HUE is not a slot: it means the same
+// thing in every palette, so it stays put and the slots are counted without it.
 export function repaletteColors(from: PaletteId, to: PaletteId, facets: ReadonlyArray<Facet>): Facet[] {
-  const source = PALETTES[from].colors
-  const target = PALETTES[to].colors
+  const source = PALETTES[from].colors.filter((c) => c !== CHANGES_HUE)
+  const target = PALETTES[to].colors.filter((c) => c !== CHANGES_HUE)
   return assignColors(
     to,
     facets.map((facet) => {
+      if (facet.color === CHANGES_HUE) return facet
       const slot = source.indexOf(facet.color)
       return { ...facet, color: slot >= 0 ? target[slot] : undefined }
     }),
   )
+}
+
+// A changes concern is one made only of rules that mark what changed: kind "diff", or any finder
+// narrowed by `changed`. Its rules decide it, not a stored flag, so a concern that gains an
+// ordinary rule stops being one (it keeps its colour; only its position moves).
+export function changesFacets(rules: ReadonlyArray<Pick<Rule, "facet" | "find" | "where">>): Set<string> {
+  const changed = (rule: Pick<Rule, "find" | "where">) => rule.find.kind === "diff" || !!rule.where?.changed
+  return new Set(
+    rules.filter((rule) => rules.filter((r) => r.facet === rule.facet).every(changed)).map((rule) => rule.facet),
+  )
+}
+
+// Changes concerns go last, in their own order, so every surface's legend reads "the code, then
+// what changed in it". Stable, so ordinary concerns keep the order they were minted in.
+export function orderFacets<T extends { readonly id: string }>(
+  facets: ReadonlyArray<T>,
+  rules: ReadonlyArray<Pick<Rule, "facet" | "find" | "where">>,
+): T[] {
+  const changes = changesFacets(rules)
+  return [...facets.filter((f) => !changes.has(f.id)), ...facets.filter((f) => changes.has(f.id))]
 }
 
 // --- helpers ---------------------------------------------------------------

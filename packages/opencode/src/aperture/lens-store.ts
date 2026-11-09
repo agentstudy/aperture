@@ -14,6 +14,8 @@ import {
   MAX_FACETS,
   MAX_RULES,
   assignColors,
+  changesFacets,
+  orderFacets,
   findFacet,
   repaletteColors,
   isValidFinder,
@@ -126,7 +128,10 @@ function migrate(raw: Record<string, unknown>): Lens {
   // Only a rule that can actually paint keeps its facet alive; a malformed one is dropped below.
   const ruled = new Set(rawRules.filter((r) => isValidFinder(r?.["find"])).map((r) => r["facet"]))
   const rawFacets = Array.isArray(raw["facets"]) ? (raw["facets"] as Array<Record<string, unknown>>) : []
-  const facets = assignColors(
+  const validRules = rawRules.filter(
+    (r) => isValidFinder(r?.["find"]) && typeof r["facet"] === "string",
+  ) as unknown as Rule[]
+  const colored = assignColors(
     palette,
     rawFacets
       .filter((f) => typeof f?.["id"] === "string" && (f["ruleOnly"] === true || f["owner"] || ruled.has(f["id"])))
@@ -143,8 +148,12 @@ function migrate(raw: Record<string, unknown>): Lens {
         owner: resolveOwner(f["owner"]),
         ...(typeof f["createdBy"] === "string" ? { createdBy: f["createdBy"] } : {}),
       })),
+    changesFacets(validRules),
   )
-  const rules = normalizeRules(rawRules, facets)
+  const rules = normalizeRules(rawRules, colored)
+  // Lenses written before changes concerns were ordered last are reordered on load; colours
+  // are pinned above, so nothing re-hues.
+  const facets = orderFacets(colored, rules)
   return {
     id: String(raw["id"]),
     name: typeof raw["name"] === "string" ? raw["name"] : String(raw["id"]),
@@ -407,16 +416,20 @@ export const create = (directory: string, input: CreateInput, actor: Actor): Eff
     Effect.gen(function* () {
       const missing = whatWhyMissing(actor, input)
       if (missing.length) return { status: "needs-what-why" as const, facet: input.facet.trim(), missing }
-      const facet = assignColors("categorical", [
-        {
-          id: slugify(input.facet),
-          label: input.facet.trim(),
-          what: input.what?.trim() ?? "",
-          why: input.why?.trim() ?? "",
-          owner: actor.kind,
-          ...(actor.agent ? { createdBy: actor.agent } : {}),
-        },
-      ])[0]!
+      const facet = assignColors(
+        "categorical",
+        [
+          {
+            id: slugify(input.facet),
+            label: input.facet.trim(),
+            what: input.what?.trim() ?? "",
+            why: input.why?.trim() ?? "",
+            owner: actor.kind,
+            ...(actor.agent ? { createdBy: actor.agent } : {}),
+          },
+        ],
+        changesFacets([{ facet: slugify(input.facet), find: input.find, where: input.where }]),
+      )[0]!
       const rule = buildRule(facet.id, input, actor)
       const lens: Lens = {
         id: mintId(input.name),
@@ -462,6 +475,7 @@ export const mark = (directory: string, id: string, input: MarkInput, actor: Act
       if (missing.length) return { status: "needs-what-why" as const, facet: input.facet.trim(), missing }
 
       const label = input.facet.trim()
+      const mintedId = existing ? undefined : uniqueFacetId(prev.facets, label)
       // A what or why given for an existing concern is an edit to it, recorded as one below.
       const revision = existing ? revise(existing, { what: input.what, why: input.why }) : undefined
       const fields = unjustified(actor, revision?.fields ?? [])
@@ -469,30 +483,29 @@ export const mark = (directory: string, id: string, input: MarkInput, actor: Act
       const revised = revision?.fields.length ? revision.facet : undefined
       const facets = existing
         ? prev.facets.map((t) => (t.id === revised?.id ? revised : t))
-        : assignColors(prev.palette, [
-            ...prev.facets,
-            {
-              id: uniqueFacetId(prev.facets, label),
-              label,
-              what: input.what?.trim() ?? "",
-              why: input.why?.trim() ?? "",
-              owner: actor.kind,
-              ...(actor.agent ? { createdBy: actor.agent } : {}),
-            },
-          ])
-      const facet = revised ?? existing ?? facets[facets.length - 1]!
+        : assignColors(
+            prev.palette,
+            [
+              ...prev.facets,
+              {
+                id: mintedId!,
+                label,
+                what: input.what?.trim() ?? "",
+                why: input.why?.trim() ?? "",
+                owner: actor.kind,
+                ...(actor.agent ? { createdBy: actor.agent } : {}),
+              },
+            ],
+            changesFacets([...(prev.rules ?? []), { facet: mintedId!, find: input.find, where: input.where }]),
+          )
+      const facet = revised ?? existing ?? facets.find((t) => t.id === mintedId)!
       const rule = buildRule(facet.id, input, actor)
       const rules = [...(prev.rules ?? [])]
       const at = rules.findIndex((r) => r.id === rule.id)
       const replaced = at >= 0 ? rules[at] : undefined
       // A second rule on a concern needs a note saying which part of the concern it marks. Replacing
       // a rule in place adds nothing to tell apart, so it is exempt.
-      if (
-        actor.agent !== undefined &&
-        at < 0 &&
-        !input.note?.trim() &&
-        rules.some((r) => r.facet === facet.id)
-      )
+      if (actor.agent !== undefined && at < 0 && !input.note?.trim() && rules.some((r) => r.facet === facet.id))
         return { status: "needs-note" as const, lens: prev, facet }
       // Enforced here rather than left to `normalizeRules`, which silently truncates on read —
       // an unchecked append would report success and then vanish on the next read.
@@ -500,7 +513,7 @@ export const mark = (directory: string, id: string, input: MarkInput, actor: Act
       if (at >= 0) rules[at] = rule
       else rules.push(rule)
 
-      const next: Lens = { ...prev, facets, rules }
+      const next: Lens = { ...prev, facets: orderFacets(facets, rules), rules }
       project[id] = next
       const written = yield* writeDoc(lensesFile(directory), project)
       if (written)
@@ -603,7 +616,7 @@ export const unmark = (
       const removedIds = new Set(removedRules.map((r) => r.id))
       const rules = prevRules.filter((r) => !removedIds.has(r.id))
 
-      const next: Lens = { ...prev, facets, rules: rules.length ? rules : undefined }
+      const next: Lens = { ...prev, facets: orderFacets(facets, rules), rules: rules.length ? rules : undefined }
       project[id] = next
       const written = yield* writeDoc(lensesFile(directory), project)
       if (written)

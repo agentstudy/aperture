@@ -5,13 +5,14 @@ import os from "os"
 import path from "path"
 import { ApertureLensStore } from "@/aperture/lens-store"
 import { ApertureLensHistory, USER, type Actor } from "@/aperture/lens-history"
-import { MAX_FACETS, MAX_RULES, PALETTES, type Finder } from "@/aperture/lenses"
+import { CHANGES_HUE, MAX_FACETS, MAX_RULES, PALETTES, type Finder } from "@/aperture/lenses"
 
 // Lens definitions, the active pointer and the change history persist in the project directory
 // under .opencode/aperture/, so a Lens is shareable and committable and its history is reviewable.
 
 const run = <A>(effect: Effect.Effect<A>) => Effect.runPromise(effect)
 const pattern = (p: string): Finder => ({ kind: "pattern", pattern: p })
+const diff = (glob: string): Finder => ({ kind: "diff", glob: [glob] })
 const AGENT: Actor = { kind: "agent", agent: "build", sessionID: "ses_1", turnID: "msg_turn1", reason: "curating" }
 const UNEXPLAINED: Actor = { kind: "agent", agent: "build", sessionID: "ses_1", turnID: "msg_turn1" }
 
@@ -488,5 +489,81 @@ describe("aperture lens-store — history", () => {
     const before = (await run(ApertureLensHistory.read(dir))).length
     await run(ApertureLensStore.remove(dir, lens.id, AGENT))
     expect((await run(ApertureLensHistory.read(dir))).length).toBe(before)
+  })
+})
+
+// Light blue means "what changed" on every surface, and the legend reads "the code, then what changed
+// in it": changes concerns take CHANGES_HUE first and always sit after the ordinary ones.
+describe("aperture lens-store — changes concerns", () => {
+  const mark = (id: string, facet: string, find: Finder, where?: { changed: string }) =>
+    run(ApertureLensStore.mark(dir, id, { facet, find, ...(where ? { where } : {}) }, USER))
+
+  test("a diff concern minted after ordinary ones gets light blue and sits last", async () => {
+    const lens = await lensOf()
+    for (const name of ["a", "b", "c", "d"]) await mark(lens.id, name, pattern(name))
+    const changes = await mark(lens.id, "my-changes", diff("src/**"))
+    if (changes.status !== "ok") throw new Error(changes.status)
+    expect(changes.facet.color).toBe(CHANGES_HUE)
+    expect(changes.lens.facets.map((f) => f.id)).toEqual(["retry-path", "a", "b", "c", "d", "my-changes"])
+    // Four ordinary concerns past the first skip the reserved hue.
+    expect(changes.lens.facets.slice(0, 5).some((f) => f.color === CHANGES_HUE)).toBe(false)
+  })
+
+  test("an ordinary concern minted after a diff one is ordered before it", async () => {
+    const lens = await lensOf()
+    await mark(lens.id, "my-changes", diff("src/**"))
+    const later = await mark(lens.id, "callers", pattern("call"))
+    if (later.status !== "ok") throw new Error(later.status)
+    expect(later.lens.facets.map((f) => f.id)).toEqual(["retry-path", "callers", "my-changes"])
+    expect(later.facet.color).not.toBe(CHANGES_HUE)
+    expect((await run(ApertureLensStore.list(dir)))[0]!.facets.map((f) => f.id)).toEqual([
+      "retry-path",
+      "callers",
+      "my-changes",
+    ])
+  })
+
+  test("a second changes concern takes another colour and still sits last", async () => {
+    const lens = await lensOf()
+    await mark(lens.id, "my-changes", diff("src/**"))
+    const touched = await mark(lens.id, "touched-calls", pattern("call"), { changed: "HEAD" })
+    await mark(lens.id, "callers", pattern("caller"))
+    if (touched.status !== "ok") throw new Error(touched.status)
+    expect(touched.facet.color).not.toBe(CHANGES_HUE)
+    const stored = (await run(ApertureLensStore.list(dir)))[0]!
+    expect(stored.facets.map((f) => f.id)).toEqual(["retry-path", "callers", "my-changes", "touched-calls"])
+  })
+
+  test("six ordinary concerns never take light blue", async () => {
+    const lens = await lensOf()
+    for (let i = 1; i < MAX_FACETS; i++) await mark(lens.id, `c${i}`, pattern(`x${i}`))
+    const stored = (await run(ApertureLensStore.list(dir)))[0]!
+    expect(stored.facets).toHaveLength(MAX_FACETS)
+    expect(stored.facets.map((f) => f.color)).not.toContain(CHANGES_HUE)
+  })
+
+  test("a palette switch keeps light blue on the changes concern", async () => {
+    const lens = await lensOf()
+    await mark(lens.id, "callers", pattern("call"))
+    await mark(lens.id, "my-changes", diff("src/**"))
+    const result = await run(ApertureLensStore.update(dir, lens.id, { palette: "ordinal" }, USER))
+    if (result.status !== "ok") throw new Error(result.status)
+    expect(result.lens.facets.find((f) => f.id === "my-changes")!.color).toBe(CHANGES_HUE)
+    expect(new Set(result.lens.facets.map((f) => f.color)).size).toBe(3)
+  })
+
+  test("a stored Lens with its changes concern first is reordered on load without re-hueing", async () => {
+    const lens = await lensOf()
+    await mark(lens.id, "callers", pattern("call"))
+    await mark(lens.id, "my-changes", diff("src/**"))
+    const file = path.join(dir, ".opencode", "aperture", "lenses.json")
+    const doc = JSON.parse(await fs.readFile(file, "utf8"))
+    doc[lens.id].facets.reverse()
+    await fs.writeFile(file, JSON.stringify(doc))
+    const stored = (await run(ApertureLensStore.list(dir)))[0]!
+    expect(stored.facets.map((f) => f.id)).toEqual(["callers", "retry-path", "my-changes"])
+    expect(Object.fromEntries(stored.facets.map((f) => [f.id, f.color]))).toEqual(
+      Object.fromEntries(doc[lens.id].facets.map((f: { id: string; color: string }) => [f.id, f.color])),
+    )
   })
 })

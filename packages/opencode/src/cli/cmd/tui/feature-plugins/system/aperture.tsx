@@ -95,6 +95,10 @@ const REFRESH_POLL_MS = 5000
 const CHANGED_TURNS = 100
 const AGENT_MARK = "✎"
 const TREE_MARK = "±"
+// What each mark means, shared by the always-on hint and the toggle's hover so they never disagree.
+// A file the agent changed is uncommitted too; it shows ✎ only, since that is the more specific.
+const AGENT_MEANING = "changed by the agent this session"
+const TREE_MEANING = "uncommitted in git (shell commands or your own edits)"
 // Columns a group shows before the rest fold behind a "+N more" column, so one huge group can't
 // push every other group off the strip. Expanding a group affects that group alone.
 const MAX_GROUP_COLUMNS = 3
@@ -576,10 +580,25 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
                     {truncate("why: " + (entry().why || "none given"), detailWidth())}
                   </text>
                   <text wrapMode="none" fg={theme().textMuted}>
-                    {truncate(entry().queries.length ? "query: " + entry().queries.join(" · ") : "no rules", detailWidth())}
+                    {truncate(
+                      entry().queries.length ? "query: " + entry().queries.join(" · ") : "no rules",
+                      detailWidth(),
+                    )}
                   </text>
                 </>
               )}
+            </Match>
+            <Match when={hovered()?.kind === "scope"}>
+              <text wrapMode="none" fg={theme().text}>
+                {truncate(`${AGENT_MARK} ${AGENT_MEANING}   ${TREE_MARK} ${TREE_MEANING}`, detailWidth())}
+              </text>
+              <text wrapMode="none" fg={theme().textMuted}>
+                {truncate(
+                  `showing ${scope() === "agent" ? `only ${AGENT_MARK} files` : scope() === "tree" ? `only ${TREE_MARK} files` : "every file"} · ` +
+                    `click to cycle: all → ${AGENT_MARK} agent → ${TREE_MARK} uncommitted`,
+                  detailWidth(),
+                )}
+              </text>
             </Match>
             <Match when={hoveredGroup()}>
               {(entry) => (
@@ -657,6 +676,8 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
             <text
               fg={scope() !== "all" ? theme().accent : theme().textMuted}
               onMouseDown={() => cycleScope()}
+              onMouseOver={() => setHovered({ kind: "scope" })}
+              onMouseOut={() => setHovered(undefined)}
               wrapMode="none"
             >
               {changedLabel()}
@@ -857,6 +878,7 @@ function NameRow(props: {
 
 type Hovered =
   | { readonly kind: "facet"; readonly facet: string }
+  | { readonly kind: "scope" }
   | { readonly kind: "group"; readonly group: Group; readonly toggle: boolean; readonly hidden: number }
   | { readonly kind: "file"; readonly file: MarkedFile; readonly group: Group }
 
@@ -866,13 +888,19 @@ function Hints(props: { show: boolean; width: number; theme: () => TuiThemeCurre
   return (
     <Show when={props.show}>
       <text wrapMode="none" fg={props.theme().textMuted}>
-        {truncate("Hover a ■ or a facet name for its what, why and query · click a name to hide or show it", props.width)}
+        {truncate(
+          "Hover a ■ or a facet name for its what, why and query · click a name to hide or show it",
+          props.width,
+        )}
       </text>
       <text wrapMode="none" fg={props.theme().textMuted}>
         {truncate(
           "Click a file to open it at its first mark · scroll to pan · click a crowded group to expand it",
           props.width,
         )}
+      </text>
+      <text wrapMode="none" fg={props.theme().textMuted}>
+        {truncate(`${AGENT_MARK} ${AGENT_MEANING} · ${TREE_MARK} ${TREE_MEANING}`, props.width)}
       </text>
     </Show>
   )

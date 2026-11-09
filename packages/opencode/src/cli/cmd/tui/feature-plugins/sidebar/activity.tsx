@@ -847,8 +847,11 @@ const tui: TuiPlugin = async (api) => {
   })
 }
 
+// Hidden after the pilots: the timeline competed with the top bar for attention. Kept in full so
+// it can be switched back on (plugin_enabled) without rebuilding anything.
 const plugin: InternalTuiPlugin = {
   id,
+  enabled: false,
   tui,
 }
 
