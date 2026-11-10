@@ -29,9 +29,10 @@ else
 fi
 
 rec=$(record_dir "$(basename "$PWD")")
+echo "  NOTE  phase: $(repo_phase "$(basename "$PWD")"), record $rec"
 check "chat wrapper and timestamper present" '[ -x /opt/study/bin/study-pty ] && [ -x /opt/study/bin/study-ts ]'
 window_check "study logger active (logger.activate logged)" 'grep -q "\"logger.activate\"" "$rec/vscode-events.jsonl"'
-window_check "first-start layout ran" '[ -f "$rec/.layout-done" ] && grep -q "\"layout\"" "$rec/vscode-events.jsonl"'
+window_check "first-start layout ran" '[ -f "$(study_base)/$(basename "$PWD")/.layout-done" ]'
 echo "  NOTE  attach: $(tr '\n' ' ' 2>/dev/null < "$HOME/.study-attach-path" || echo 'no VS Code window has attached yet')"
 
 echo "== repo: $(basename "$PWD") @ $(git rev-parse --abbrev-ref HEAD) =="

@@ -1,26 +1,33 @@
 #!/usr/bin/env bash
-# Last step of a session: study-capture p03
-# Pushes branch participant-<id> with two commits, like pilot.sh finish: the participant's work, then
-# the artifacts (perf/, .opencode/, and .study-capture/ holding the OpenCode DB, logs and session
-# record). The DB is the ONLY transcript in the baseline condition. Quit the tool first.
+# Capture the current phase as two commits, like pilot.sh finish: the participant's work, then the
+# artifacts (perf/, .opencode/, and .study-capture/ holding the OpenCode DB, logs and session record).
+# The DB is the ONLY transcript in the OpenCode condition. Quit the tool first.
+#   study-capture <id>               commit on participant-<id> and push it (study-submit uses this)
+#   study-capture --local <branch>   commit on a new local branch and do not push (study-next uses this
+#                                    for the warm-up; study-submit pushes it at the end)
 set -euo pipefail
 . /opt/study/bin/study-lib.sh
 . /opt/tool/tool.env
 die() { echo "ERROR: $*" >&2; exit 1; }
 
-id=${1:-}
-[[ "$id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "usage: study-capture <participant-id>, e.g. p03"
+push=1
+if [ "${1:-}" = --local ]; then push=; branch=${2:-}; else branch=participant-${1:-}; fi
+[[ "$branch" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*[A-Za-z0-9]$ && "$branch" != participant- ]] \
+  || die "usage: study-capture <participant-id> | study-capture --local <branch>"
 if pgrep -f "$TOOL_PROC" >/dev/null; then
   die "the tool is still running. Quit it (Ctrl+C or /exit), then run this again."
 fi
 
 repo=$(repo_root); cd "$repo"
 rec=$(record_dir "$(basename "$repo")")
-branch=participant-$id
+phase=$(repo_phase "$(basename "$repo")")
 cur=$(git rev-parse --abbrev-ref HEAD)
 if [ "$cur" != "$branch" ]; then
-  git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1 \
-    && die "$branch already exists on the remote; use a different id or check it first"
+  if [ -n "$push" ]; then
+    git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1 \
+      && die "$branch already exists on the remote; use a different id or check it first"
+  fi
+  git rev-parse -q --verify "refs/heads/$branch" >/dev/null && die "local branch $branch already exists"
   git switch -q -c "$branch"
 fi
 
@@ -31,11 +38,11 @@ rm -f "$rec/dev-server.pid"
 base=$(sed -n 's/^repo_start_commit=//p' "$rec/session.env" 2>/dev/null || true)
 gc=(git -c user.name="Study Capture" -c user.email="capture@study.invalid")
 git add -A -- . ':!perf' ':!.opencode' ':!.study-capture'
-"${gc[@]}" commit -q --allow-empty -m "$branch: participant work ($(basename "$repo"), $TOOL)"
+"${gc[@]}" commit -q --allow-empty -m "$branch: participant work ($(basename "$repo"), $TOOL, $phase)"
 [ -n "$base" ] && echo "work: $(git diff --shortstat "$base" HEAD -- . ':!perf' ':!.opencode' ':!.study-capture')"
 
 out=.study-capture; rm -rf "$out"; mkdir -p "$out"
-[ -f "$rec/session.env" ] && { cp "$rec/session.env" "$out/"; echo "finished=$(date -Is)" >> "$out/session.env"; }
+[ -f "$rec/session.env" ] && { cp "$rec/session.env" "$out/"; { echo "phase=$phase"; echo "finished=$(date -Is)"; } >> "$out/session.env"; }
 for f in dev-server.log vscode-events.jsonl chat-events.jsonl; do
   if [ -f "$rec/$f" ]; then cp "$rec/$f" "$out/"; fi
 done
@@ -61,9 +68,13 @@ git add -A
 for d in "$out" perf .opencode; do
   if [ -e "$d" ]; then git add -f -- "$d"; fi
 done
-"${gc[@]}" commit -q --allow-empty -m "$branch: tool artifacts"
+"${gc[@]}" commit -q --allow-empty -m "$branch: tool artifacts ($phase)"
 if [ -f "$out/opencode-local.db" ] && ! git cat-file -e "HEAD:$out/opencode-local.db" 2>/dev/null; then
   die "the transcript DB was not committed; nothing was pushed. Tell the facilitator."
+fi
+if [ -z "$push" ]; then
+  echo "Saved the $phase locally on $branch at $(git rev-parse --short HEAD)."
+  exit 0
 fi
 git push -q -u origin "HEAD:$branch"
 echo "Pushed $branch at $(git rev-parse --short HEAD). Facilitator: fetch and check it before any cleanup."

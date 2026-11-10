@@ -1,7 +1,8 @@
 // Study logger: coarse, timestamped editor events, identical in both conditions.
 //
-// Writes <record>/vscode-events.jsonl, where <record> is /workspaces/.study/<repo> (as in
-// study-lib.sh). One JSON object per line: {ts, ev, ...}. No file contents, no line ranges,
+// Writes <record>/vscode-events.jsonl, where <record> is /workspaces/.study/<repo>/<phase> and phase
+// is warmup or main (as in study-lib.sh). When study-next writes <repo dir>/switched, the logger moves
+// to the main-task record and resets the window for the main task (see switchToMain). One JSON object per line: {ts, ev, ...}. No file contents, no line ranges,
 // no keystrokes. The events:
 //   logger.activate          every window load (so reloads are visible)
 //   file.open   {path, tab: new|existing, via?: definition}
@@ -15,7 +16,7 @@
 //   code.visit  {path}               first editor interaction after the participant was in the chat or away
 // chat.visit comes from study-pty, which shares the <record>/.last-side file with this logger.
 //
-// It also does the session's first-start layout once (marker <record>/.layout-done): select the
+// It also does the codespace's first-start layout once (marker <repo dir>/.layout-done): select the
 // condition's file view, move the panel to the right, and start the tool in a terminal there.
 // Every handler is wrapped: logging must never disturb the participant.
 "use strict"
@@ -23,7 +24,7 @@ const vscode = require("vscode")
 const fs = require("fs")
 const path = require("path")
 
-let record, eventsFile, sideFile, root
+let repoDir, record, eventsFile, sideFile, root
 const now = () => Date.now()
 
 function log(ev, fields) {
@@ -108,7 +109,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const PANEL_WIDEN_STEPS = 7 // each step is a fixed number of pixels; tune for the study screens
 
 async function firstStartLayout() {
-  const marker = path.join(record, ".layout-done")
+  const marker = path.join(repoDir, ".layout-done")
   if (fs.existsSync(marker)) return
   fs.writeFileSync(marker, new Date().toISOString())
   const tool = readTool()
@@ -147,15 +148,7 @@ async function firstStartLayout() {
       await vscode.commands.executeCommand(cmd)
     } catch {}
   }
-  // The tool is the terminal's own process, so nothing is typed into a shell (and nothing can be
-  // typed into the tool by other extensions). When it exits, the terminal becomes a normal shell.
-  const term = vscode.window.createTerminal({
-    name: tool === "aperture" ? "Aperture" : "OpenCode",
-    cwd: root,
-    shellPath: "/bin/bash",
-    shellArgs: ["-lc", `${tool}; exec bash -l`],
-  })
-  term.show(false)
+  const term = toolTerminal(tool)
   await sleep(800)
   for (let i = 0; i < PANEL_WIDEN_STEPS; i++) {
     try {
@@ -166,19 +159,84 @@ async function firstStartLayout() {
   log("layout", { tool, view, viewShown: shown })
 }
 
-// ---- activation ----------------------------------------------------------------------------------
-function activate(context) {
-  const folder = vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0]
-  if (!folder) return
-  root = folder.uri.fsPath
-  record = path.join(process.env.STUDY_RECORD_BASE || "/workspaces/.study", path.basename(root))
+// The tool is the terminal's own process, so nothing is typed into a shell (and nothing can be typed
+// into the tool by other extensions). When it exits, the terminal becomes a normal shell.
+const toolName = (tool) => (tool === "aperture" ? "Aperture" : "OpenCode")
+function toolTerminal(tool) {
+  const term = vscode.window.createTerminal({
+    name: toolName(tool),
+    cwd: root,
+    shellPath: "/bin/bash",
+    shellArgs: ["-lc", `${tool}; exec bash -l`],
+  })
+  term.show(false)
+  return term
+}
+
+// ---- phases ----------------------------------------------------------------------------------------
+function readPhase() {
+  try {
+    const p = fs.readFileSync(path.join(repoDir, "phase"), "utf8").trim()
+    if (p === "warmup" || p === "main") return p
+  } catch {}
+  try {
+    // study-start normally writes the phase file before any window attaches; this is the fallback.
+    return /-warmup\s*$/.test(fs.readFileSync(path.join(root, ".git", "HEAD"), "utf8")) ? "warmup" : "main"
+  } catch {
+    return "main"
+  }
+}
+function usePhase(phase) {
+  record = path.join(repoDir, phase)
   try {
     fs.mkdirSync(record, { recursive: true })
   } catch {}
   eventsFile = path.join(record, "vscode-events.jsonl")
   sideFile = path.join(record, ".last-side")
+}
+// study-next has switched the repo to the main task. Its terminal has finished by now (switched is
+// its last write), so the old tool terminals can go.
+let switched = false
+async function switchToMain() {
+  if (switched) return
+  switched = true
+  usePhase("main")
+  const tool = readTool()
+  log("phase", { phase: "main", tool })
+  for (const t of vscode.window.terminals) if (t.name === toolName(tool)) t.dispose()
+  try {
+    await vscode.commands.executeCommand("workbench.action.closeAllEditors")
+    await vscode.window.showTextDocument(vscode.Uri.file(path.join(root, "TASK-README.md")), { preview: false })
+  } catch (e) {
+    log("logger.error", { where: "switch", message: String(e) })
+  }
+  toolTerminal(tool)
+}
+
+// ---- activation ----------------------------------------------------------------------------------
+function activate(context) {
+  const folder = vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0]
+  if (!folder) return
+  root = folder.uri.fsPath
+  repoDir = path.join(process.env.STUDY_RECORD_BASE || "/workspaces/.study", path.basename(root))
+  const startPhase = readPhase()
+  usePhase(startPhase)
   const ext = context.extension && context.extension.packageJSON
-  log("logger.activate", { vscode: vscode.version, logger: ext && ext.version, tool: readTool() })
+  log("logger.activate", { vscode: vscode.version, logger: ext && ext.version, tool: readTool(), phase: startPhase })
+  if (startPhase === "warmup") {
+    // Polled rather than fs.watch: the marker's directory may not exist yet, and 2 s is plenty.
+    const marker = path.join(repoDir, "switched")
+    const timer = setInterval(
+      safe(() => {
+        if (fs.existsSync(marker)) {
+          clearInterval(timer)
+          switchToMain().catch((e) => log("logger.error", { where: "switch", message: String(e) }))
+        }
+      }),
+      2000,
+    )
+    context.subscriptions.push({ dispose: () => clearInterval(timer) })
+  }
   const sub = (d) => context.subscriptions.push(d)
 
   // file.open / code.visit. tab=new when the file had no tab before this switch.

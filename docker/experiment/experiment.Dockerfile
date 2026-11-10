@@ -1,7 +1,7 @@
-# Images for the experiment codespaces (store/library x warmup/main x aperture/baseline).
+# Images for the experiment codespaces (store/library x warmup/main x aperture/opencode).
 # Two targets share one base, so the conditions differ only in the tool:
 #   --target aperture   Aperture at APERTURE_SHA plus its VS Code extension
-#   --target baseline   pristine OpenCode at BASELINE_SHA; no Aperture code in the image
+#   --target opencode   pristine OpenCode at OPENCODE_SHA; no Aperture code in the image
 # Nothing repo-specific and no secrets. Versions match what the pilot ran (pilot.sh).
 FROM mcr.microsoft.com/devcontainers/base:ubuntu-24.04 AS base
 
@@ -38,6 +38,7 @@ RUN chmod 0755 /opt/study/bin/* \
     && ln -s /opt/study/bin/study-capture /usr/local/bin/study-capture \
     && ln -s /opt/study/bin/study-verify /usr/local/bin/study-verify \
     && ln -s /opt/study/bin/study-submit /usr/local/bin/study-submit \
+    && ln -s /opt/study/bin/study-next /usr/local/bin/study-next \
     && mkdir -p /opt/tool && chown vscode:vscode /opt/tool \
     && cd /opt/study/study-logger \
     && npx -y @vscode/vsce@3.2.1 package --no-dependencies --skip-license -o /opt/study/study-logger.vsix \
@@ -55,7 +56,7 @@ RUN mkdir -p /home/vscode/.config/vscode-dev-containers \
 RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}"
 ENV PATH="/home/vscode/.bun/bin:${PATH}"
 
-# Fetches one commit only, so the baseline image carries no Aperture history.
+# Fetches one commit only, so the opencode image carries no Aperture history.
 FROM base AS aperture
 ARG APERTURE_SHA
 USER root
@@ -72,15 +73,15 @@ RUN test -n "${APERTURE_SHA}" \
 RUN test -f /opt/tool/aperture.vsix && test -f /opt/tool/packages/opencode/src/aperture/study-log.ts \
  && test -n "$(find /opt/tool/node_modules/.bun -name tree_sitter_powershell_binding.node -print -quit)"
 
-FROM base AS baseline
-ARG BASELINE_SHA
+FROM base AS opencode
+ARG OPENCODE_SHA
 USER root
 RUN ln -s /opt/study/bin/study-tool /usr/local/bin/opencode
 USER vscode
-RUN test -n "${BASELINE_SHA}" \
+RUN test -n "${OPENCODE_SHA}" \
  && cd /opt/tool && git init -q && git remote add origin https://github.com/aperture-study/aperture \
- && git fetch -q --depth 1 origin "${BASELINE_SHA}" && git checkout -q FETCH_HEAD \
+ && git fetch -q --depth 1 origin "${OPENCODE_SHA}" && git checkout -q FETCH_HEAD \
  && bun install \
- && printf 'TOOL=opencode\nTOOL_COMMIT=%s\n' "${BASELINE_SHA}" > /opt/tool/tool.env
+ && printf 'TOOL=opencode\nTOOL_COMMIT=%s\n' "${OPENCODE_SHA}" > /opt/tool/tool.env
 RUN test ! -e /opt/tool/packages/opencode/src/aperture \
  && test -n "$(find /opt/tool/node_modules/.bun -name tree_sitter_powershell_binding.node -print -quit)"
