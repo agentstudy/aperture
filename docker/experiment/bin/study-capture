@@ -36,7 +36,9 @@ git add -A -- . ':!perf' ':!.opencode' ':!.study-capture'
 
 out=.study-capture; rm -rf "$out"; mkdir -p "$out"
 [ -f "$rec/session.env" ] && { cp "$rec/session.env" "$out/"; echo "finished=$(date -Is)" >> "$out/session.env"; }
-[ -f "$rec/dev-server.log" ] && cp "$rec/dev-server.log" "$out/"
+for f in dev-server.log vscode-events.jsonl chat-events.jsonl; do
+  if [ -f "$rec/$f" ]; then cp "$rec/$f" "$out/"; fi
+done
 db=$rec/data/opencode/opencode-local.db
 if [ -f "$db" ]; then
   # The backup API folds in the -wal file, which can hold a large share of the session.
@@ -56,7 +58,9 @@ if [ -n "${ANTHROPIC_API_KEY:-}" ] && grep -rqaF "$ANTHROPIC_API_KEY" "$out" per
 fi
 # -f: the task repos ignore *.db, which would silently drop the transcript DB.
 git add -A
-for d in "$out" perf .opencode; do [ -e "$d" ] && git add -f -- "$d"; done
+for d in "$out" perf .opencode; do
+  if [ -e "$d" ]; then git add -f -- "$d"; fi
+done
 "${gc[@]}" commit -q --allow-empty -m "$branch: tool artifacts"
 if [ -f "$out/opencode-local.db" ] && ! git cat-file -e "HEAD:$out/opencode-local.db" 2>/dev/null; then
   die "the transcript DB was not committed; nothing was pushed. Tell the facilitator."

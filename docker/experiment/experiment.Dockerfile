@@ -33,14 +33,23 @@ RUN npx -y "playwright@${PLAYWRIGHT_VERSION}" install-deps chromium \
 
 COPY docker/experiment/bin/ /opt/study/bin/
 COPY docker/experiment/opencode.json /opt/study/opencode.json
+COPY docker/experiment/study-logger/ /opt/study/study-logger/
 RUN chmod 0755 /opt/study/bin/* \
     && ln -s /opt/study/bin/study-capture /usr/local/bin/study-capture \
     && ln -s /opt/study/bin/study-verify /usr/local/bin/study-verify \
     && ln -s /opt/study/bin/study-submit /usr/local/bin/study-submit \
-    && mkdir -p /opt/tool && chown vscode:vscode /opt/tool
+    && mkdir -p /opt/tool && chown vscode:vscode /opt/tool \
+    && cd /opt/study/study-logger \
+    && npx -y @vscode/vsce@3.2.1 package --no-dependencies --skip-license -o /opt/study/study-logger.vsix \
+    && python3 -c 'import json;p=json.load(open("package.json"));print(f"{p["publisher"]}.{p["name"]}-{p["version"]}")' > /opt/study/study-logger.id \
+    && rm -rf /root/.npm
 
 USER vscode
 RUN npx -y "playwright@${PLAYWRIGHT_VERSION}" install chromium && rm -rf /home/vscode/.npm
+# Extensions go straight into the server's extension folder, so the first window loads them with no
+# reload. study-attach installs them the usual way if VS Code did not pick these up.
+RUN /opt/study/bin/study-unpack-vsix /opt/study/study-logger.vsix \
+      "/home/vscode/.vscode-remote/extensions/$(cat /opt/study/study-logger.id)"
 RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}"
 ENV PATH="/home/vscode/.bun/bin:${PATH}"
 
@@ -56,6 +65,7 @@ RUN test -n "${APERTURE_SHA}" \
  && bun install \
  && cd sdks/aperture-vscode && bun install && bash package-vsix.sh \
  && cp aperture-0.0.1.vsix /opt/tool/aperture.vsix \
+ && /opt/study/bin/study-unpack-vsix /opt/tool/aperture.vsix /home/vscode/.vscode-remote/extensions/sst-dev.aperture-0.0.1 \
  && printf 'TOOL=aperture\nTOOL_COMMIT=%s\n' "${APERTURE_SHA}" > /opt/tool/tool.env
 RUN test -f /opt/tool/aperture.vsix && test -f /opt/tool/packages/opencode/src/aperture/study-log.ts \
  && test -n "$(find /opt/tool/node_modules/.bun -name tree_sitter_powershell_binding.node -print -quit)"

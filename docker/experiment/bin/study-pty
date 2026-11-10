@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+"""Run the chat tool on its own pty and log, without content, when the participant returns to it.
+
+  study-pty <record-dir> -- <command> [args...]
+
+Everything is passed through byte for byte, and window resizes are forwarded, so the TUI behaves as
+if started directly. Input is only inspected to classify it. One event goes to <record>/chat-events.jsonl
+when chat input arrives and the participant's last interaction (per <record>/.last-side, shared with the
+VS Code study logger) was somewhere else:
+  {"ts": ..., "ev": "chat.visit", "input": "type" | "scroll" | "click" | "focus"}
+Nothing typed is recorded. Mouse movement alone and the terminal's replies to the TUI's own queries
+do not count as input. Logging failures are ignored; the tool must never be affected.
+"""
+import errno, fcntl, json, os, pty, re, select, signal, sys, termios, time, tty
+from datetime import datetime, timezone
+
+MOUSE = re.compile(rb"\x1b\[<(\d+);\d+;\d+([Mm])")
+FOCUS_IN = b"\x1b[I"
+# Terminal replies, not user input: cursor position reports, private-mode and kitty replies,
+# OSC and DCS strings, and focus-out.
+REPLIES = re.compile(rb"\x1b\[\d+;\d+R|\x1b\[\?[\d;$]*[a-zA-Z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1bP.*?\x1b\\|\x1b\[O", re.S)
+
+
+def main():
+    if len(sys.argv) < 4 or sys.argv[2] != "--":
+        sys.exit("usage: study-pty <record-dir> -- <command> [args...]")
+    record, argv = sys.argv[1], sys.argv[3:]
+    events = os.path.join(record, "chat-events.jsonl")
+    side_file = os.path.join(record, ".last-side")
+    last_check = [0.0]
+
+    def classify(data):
+        kinds = []
+        for b, kind in MOUSE.findall(data):
+            b = int(b)
+            if b & 64:
+                kinds.append("scroll")
+            elif b & 32:
+                pass  # movement only
+            elif kind == b"M":
+                kinds.append("click")
+        rest = REPLIES.sub(b"", MOUSE.sub(b"", data))
+        if FOCUS_IN in rest:
+            kinds.append("focus")
+            rest = rest.replace(FOCUS_IN, b"")
+        if rest:
+            kinds.append("type")
+        return kinds[0] if kinds else None
+
+    def activity(kind):
+        t = time.time()
+        if t - last_check[0] < 1.0:
+            return
+        last_check[0] = t
+        try:
+            with open(side_file) as f:
+                side = f.read().split(" ")[0]
+        except OSError:
+            side = ""
+        if side == "chat":
+            return
+        try:
+            with open(side_file, "w") as f:
+                f.write(f"chat {int(t * 1000)}")
+            ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+            with open(events, "a") as f:
+                f.write(json.dumps({"ts": ts, "ev": "chat.visit", "input": kind}) + "\n")
+        except OSError:
+            pass
+
+    pid, fd = pty.fork()
+    if pid == 0:
+        try:
+            os.execvp(argv[0], argv)
+        finally:
+            os._exit(127)
+
+    def resize(*_):
+        try:
+            ws = fcntl.ioctl(0, termios.TIOCGWINSZ, b"\0" * 8)
+            fcntl.ioctl(fd, termios.TIOCSWINSZ, ws)  # the child gets SIGWINCH from this
+        except OSError:
+            pass
+
+    interactive = os.isatty(0)
+    saved = termios.tcgetattr(0) if interactive else None
+    if interactive:
+        resize()
+        signal.signal(signal.SIGWINCH, resize)
+        tty.setraw(0)
+    # The tool's own SIGTERM/SIGHUP handling decides how it exits; we just follow it.
+    signal.signal(signal.SIGHUP, lambda *_: os.kill(pid, signal.SIGHUP))
+    signal.signal(signal.SIGTERM, lambda *_: os.kill(pid, signal.SIGTERM))
+    fds = [0, fd]
+    try:
+        while True:
+            try:
+                ready, _, _ = select.select(fds, [], [])
+            except InterruptedError:
+                continue
+            if fd in ready:
+                try:
+                    data = os.read(fd, 65536)
+                except OSError as e:
+                    if e.errno == errno.EIO:
+                        break  # child closed the pty
+                    raise
+                if not data:
+                    break
+                view = memoryview(data)
+                while view:
+                    view = view[os.write(1, view):]
+            if 0 in ready:
+                data = os.read(0, 65536)
+                if not data:
+                    fds.remove(0)
+                    continue
+                try:
+                    kind = classify(data)
+                    if kind:
+                        activity(kind)
+                except Exception:
+                    pass
+                view = memoryview(data)
+                while view:
+                    view = view[os.write(fd, view):]
+    finally:
+        if saved is not None:
+            termios.tcsetattr(0, termios.TCSAFLUSH, saved)
+    _, status = os.waitpid(pid, 0)
+    sys.exit(os.waitstatus_to_exitcode(status) if status else 0)
+
+
+if __name__ == "__main__":
+    main()

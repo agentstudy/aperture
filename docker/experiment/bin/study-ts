@@ -1,0 +1,10 @@
+#!/usr/bin/env python3
+"""Prefix each line of stdin with a UTC timestamp (used on the dev server's output, so API requests
+in dev-server.log can be placed on the session timeline)."""
+import sys
+from datetime import datetime, timezone
+out = sys.stdout.buffer
+for line in sys.stdin.buffer:
+    ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    out.write(ts.encode() + b" " + line)
+    out.flush()

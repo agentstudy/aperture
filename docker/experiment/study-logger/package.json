@@ -1,0 +1,13 @@
+{
+  "name": "study-logger",
+  "displayName": "Study logger",
+  "description": "Logs coarse editor interaction events for the Aperture study. Identical in both conditions.",
+  "version": "0.1.0",
+  "publisher": "aperture-study",
+  "license": "UNLICENSED",
+  "repository": { "type": "git", "url": "https://github.com/aperture-study/aperture" },
+  "engines": { "vscode": "^1.93.0" },
+  "extensionKind": ["workspace"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./extension.js"
+}

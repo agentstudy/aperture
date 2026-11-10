@@ -1,23 +1,30 @@
 #!/usr/bin/env bash
-# postAttachCommand (Aperture only): install the extension. It activates only after a window reload.
+# postAttachCommand, both conditions: make sure the study extensions are installed.
+#   always:          the study logger (/opt/study/study-logger.vsix)
+#   Aperture only:   Aperture's extension (/opt/tool/aperture.vsix)
+# The image already unpacks both into ~/.vscode-remote/extensions, so the first window loads them with no
+# reload. This is the fallback if that copy is missing: install with the `code` CLI, which can sometimes
+# load into a live window, otherwise unpack, which needs a window reload. Never reinstall an extension
+# that is present: replacing it under a live window is what triggers "reload required".
+# The path taken is recorded in ~/.study-attach-path for study-verify.
 set -uo pipefail
-VSIX=/opt/tool/aperture.vsix
-TRACE=$HOME/.aperture-attach-path
-EXT_DIR=$HOME/.vscode-remote/extensions/sst-dev.aperture-0.0.1
-if command -v code >/dev/null 2>&1 && code --install-extension "$VSIX" --force; then
-  echo code-cli > "$TRACE"; exit 0
-fi
-mkdir -p "$EXT_DIR"
-python3 - "$VSIX" "$EXT_DIR" <<'PY'
-import sys, zipfile, pathlib
-vsix, dest = sys.argv[1], pathlib.Path(sys.argv[2])
-with zipfile.ZipFile(vsix) as z:
-    for info in z.infolist():
-        if info.is_dir() or not info.filename.startswith("extension/"):
-            continue
-        target = dest / info.filename[len("extension/"):]
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(z.read(info))
-PY
-echo vsix-unpack > "$TRACE"
+. /opt/tool/tool.env
+EXT=$HOME/.vscode-remote/extensions
+TRACE=$HOME/.study-attach-path
+: > "$TRACE"
+
+install() { # <vsix> <publisher.name-version>
+  local vsix=$1 id=$2
+  # Present only if VS Code has registered it, not merely if the folder exists.
+  if [ -f "$EXT/$id/package.json" ] && grep -qF "\"$id\"" "$EXT/extensions.json" 2>/dev/null; then
+    echo "$id preinstalled" >> "$TRACE"; return
+  fi
+  if command -v code >/dev/null 2>&1 && code --install-extension "$vsix" --force >/dev/null 2>&1; then
+    echo "$id code-cli" >> "$TRACE"; return
+  fi
+  /opt/study/bin/study-unpack-vsix "$vsix" "$EXT/$id" && echo "$id vsix-unpack" >> "$TRACE"
+}
+
+install /opt/study/study-logger.vsix "$(cat /opt/study/study-logger.id)"
+[ "$TOOL" = aperture ] && install /opt/tool/aperture.vsix sst-dev.aperture-0.0.1
 exit 0
