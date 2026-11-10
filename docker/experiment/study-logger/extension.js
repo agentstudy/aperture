@@ -2,7 +2,8 @@
 //
 // Writes <record>/vscode-events.jsonl, where <record> is /workspaces/.study/<repo>/<phase> and phase
 // is warmup or main (as in study-lib.sh). When study-next writes <repo dir>/switched, the logger moves
-// to the main-task record and resets the window for the main task (see switchToMain). One JSON object per line: {ts, ev, ...}. No file contents, no line ranges,
+// to the main-task record and resets the window for the main task (see switchToMain). When study-submit
+// writes <repo dir>/submitted, it closes the editors and the tool terminal and stops logging. One JSON object per line: {ts, ev, ...}. No file contents, no line ranges,
 // no keystrokes. The events:
 //   logger.activate          every window load (so reloads are visible)
 //   file.open   {path, tab: new|existing, via?: definition}
@@ -177,7 +178,7 @@ function toolTerminal(tool) {
 function readPhase() {
   try {
     const p = fs.readFileSync(path.join(repoDir, "phase"), "utf8").trim()
-    if (p === "warmup" || p === "main") return p
+    if (p === "warmup" || p === "main" || p === "submitted") return p
   } catch {}
   try {
     // study-start normally writes the phase file before any window attaches; this is the fallback.
@@ -213,6 +214,17 @@ async function switchToMain() {
   toolTerminal(tool)
 }
 
+// study-submit has pushed the work and reset the tree. Take everything that showed the work or the
+// chat off the screen: the tool terminal (its scrollback is the chat) and every editor. Logging stops.
+let submitted = false
+async function clearAfterSubmit() {
+  if (submitted) return
+  submitted = true
+  eventsFile = sideFile = null // the records were moved away with the submission
+  for (const t of vscode.window.terminals) if (t.name === toolName(readTool())) t.dispose()
+  await vscode.commands.executeCommand("workbench.action.closeAllEditors")
+}
+
 // ---- activation ----------------------------------------------------------------------------------
 function activate(context) {
   const folder = vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0]
@@ -220,6 +232,7 @@ function activate(context) {
   root = folder.uri.fsPath
   repoDir = path.join(process.env.STUDY_RECORD_BASE || "/workspaces/.study", path.basename(root))
   const startPhase = readPhase()
+  if (startPhase === "submitted") return // nothing left to lay out or log
   usePhase(startPhase)
   const ext = context.extension && context.extension.packageJSON
   log("logger.activate", { vscode: vscode.version, logger: ext && ext.version, tool: readTool(), phase: startPhase })
@@ -231,6 +244,19 @@ function activate(context) {
         if (fs.existsSync(marker)) {
           clearInterval(timer)
           switchToMain().catch((e) => log("logger.error", { where: "switch", message: String(e) }))
+        }
+      }),
+      2000,
+    )
+    context.subscriptions.push({ dispose: () => clearInterval(timer) })
+  }
+  {
+    const marker = path.join(repoDir, "submitted")
+    const timer = setInterval(
+      safe(() => {
+        if (fs.existsSync(marker)) {
+          clearInterval(timer)
+          clearAfterSubmit().catch(() => {})
         }
       }),
       2000,

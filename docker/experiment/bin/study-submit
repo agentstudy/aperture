@@ -1,11 +1,28 @@
 #!/usr/bin/env bash
-# The participant's last step: `study-submit`. Closes the tool and the dev server, then runs
-# study-capture with an ID taken from the submission time (UTC), e.g. participant-20261112-143005-utc,
-# and pushes the warm-up that study-next saved locally as participant-<id>-warmup.
-# Running it again in the same codespace re-pushes to the same branches.
+# The participant's last step: `study-submit`.
+#   1. close the tool and the dev server, then run study-capture with an ID taken from the submission
+#      time (UTC), e.g. participant-20261112-143005-utc, and push the warm-up that study-next saved
+#      locally as participant-<id>-warmup
+#   2. only once both pushes succeeded: reset the codespace so the work is no longer on screen. The tree
+#      goes back to the main task's starting commit, both phase records (the chat history) move to
+#      <base>/<repo>/.submitted/<id>/, the demo DB is reset and the dev server restarts
+#   3. write <base>/<repo>/submitted; the study logger then closes the editors and the tool terminal
+#   4. print the code word the study site asks for ($STUDY_CODE_SUBMIT, from devcontainer.json)
+# Running it again after a successful submit only prints the code word again.
 set -euo pipefail
 . /opt/study/bin/study-lib.sh
-cd "$(repo_root)"
+repo=$(repo_root); cd "$repo"
+name=$(basename "$repo")
+dir=$(study_base)/$name
+
+show_code() {
+  echo
+  echo "Submitted. Thank you!"
+  if [ -n "${STUDY_CODE_SUBMIT:-}" ]; then
+    echo "Your code for the study site is:  ${STUDY_CODE_SUBMIT^^}"
+  fi
+}
+if [ "$(repo_phase "$name")" = submitted ]; then show_code; exit 0; fi
 
 read -r -p "Submit your work now? This closes the coding assistant. [y/N] " answer </dev/tty || answer=
 [[ "$answer" =~ ^[Yy] ]] || { echo "Not submitted."; exit 1; }
@@ -18,8 +35,28 @@ push_warmup() {
   git rev-parse -q --verify refs/heads/study-warmup >/dev/null || return 0
   git push -q origin "study-warmup:refs/heads/participant-$id-warmup" && echo "Pushed participant-$id-warmup."
 }
-if /opt/study/bin/study-capture "$id" && push_warmup; then
-  echo; echo "Submitted. Thank you! You can close this window."
-else
+if ! { /opt/study/bin/study-capture "$id" && push_warmup; }; then
   echo; echo "SUBMISSION FAILED. Please tell the facilitator and leave this window open." >&2; exit 1
 fi
+
+# Both pushes succeeded, so the work is safe on GitHub. Clear it from the codespace.
+echo "Clearing the codespace..."
+rec=$(record_dir "$name")
+start=$(sed -n 's/^repo_start_commit=//p' "$rec/session.env" 2>/dev/null | head -n 1)
+main=$(cat "$dir/next-branch" 2>/dev/null || true)
+[ -n "$main" ] || main=$(sed -n 's/^branch=//p' "$rec/session.env" 2>/dev/null | head -n 1)
+if [ -n "$start" ] && [ -n "$main" ] && [[ "$main" != participant-* ]]; then
+  git checkout -q -f -B "$main" "$start"
+elif [ -n "$start" ]; then
+  git checkout -q -f --detach "$start"
+fi
+git clean -q -fd   # untracked only; .venv, node_modules and the demo DB stay
+mkdir -p "$dir/.submitted/$id"
+for p in warmup main; do
+  if [ -d "$dir/$p" ]; then mv "$dir/$p" "$dir/.submitted/$id/$p"; fi
+done
+echo submitted > "$dir/phase"
+make reset-db >/dev/null 2>&1 || true
+/opt/study/bin/study-start
+date -Is > "$dir/submitted"
+show_code

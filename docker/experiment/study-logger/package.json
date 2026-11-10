@@ -2,7 +2,7 @@
   "name": "study-logger",
   "displayName": "Study logger",
   "description": "Logs coarse editor interaction events for the Aperture study. Identical in both conditions.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "aperture-study",
   "license": "UNLICENSED",
   "repository": { "type": "git", "url": "https://github.com/aperture-study/aperture" },

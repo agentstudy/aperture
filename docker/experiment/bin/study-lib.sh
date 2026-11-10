@@ -1,10 +1,12 @@
 # Shared paths. Session records live outside the repo, so they never appear in Source Control or
 # the agent's view of the tree, and under /workspaces, so they survive a container rebuild.
 #
-#   <base>/<repo>/phase           "warmup" or "main": which part of the session is current
+#   <base>/<repo>/phase           "warmup", "main" or "submitted": which part of the session is current
 #   <base>/<repo>/warmup/, main/  one record per phase: session.env, tool data (transcript DB), logs
 #   <base>/<repo>/.layout-done    the study logger's first-start layout ran
 #   <base>/<repo>/switched        written by study-next when the main task is ready
+#   <base>/<repo>/submitted       written by study-submit after a successful push and reset
+#   <base>/<repo>/.submitted/<id>/  the phase records, moved there by study-submit (already pushed)
 repo_root() { git rev-parse --show-toplevel 2>/dev/null || pwd; }
 study_base() {
   local base=${STUDY_RECORD_BASE:-/workspaces/.study}

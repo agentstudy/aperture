@@ -46,11 +46,13 @@ check "demo database seeded" '[ -s backend/app.db ]'
 check "Chromium launches" '(cd frontend && node -e "require(\"@playwright/test\").chromium.launch().then(b=>b.close()).catch(e=>{console.error(e);process.exit(1)})")'
 
 echo "== app =="
-check "API answers on 8000" '[ "$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/products)" != 000 ]'
+case "$(basename "$PWD")" in library*) api=books ;; *) api=products ;; esac
+check "API answers on 8000" '[ "$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/$api)" = 200 ]'
 check "dev-server log is timestamped" 'tail -n 1 "$rec/dev-server.log" | grep -qE "^[0-9]{4}-[0-9]{2}-[0-9]{2}T"'
 check "web app on 5173" '[ "$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5173/)" = 200 ]'
 check "web app accepts the forwarded host" '[ "$(curl -s -o /dev/null -w "%{http_code}" -H "Host: ${CODESPACE_NAME:-x}-5173.app.github.dev" http://localhost:5173/)" = 200 ]'
-check "API reachable through the Vite proxy" '[ "$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5173/api/products)" = 200 ]'
+check "API reachable through the Vite proxy" '[ "$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5173/api/$api)" = 200 ]'
+check "study-site code words set" '[ -n "${STUDY_CODE_NEXT:-}" ] && [ -n "${STUDY_CODE_SUBMIT:-}" ]'
 
 if [ "${1:-}" = --live ]; then
   echo "== live model request =="

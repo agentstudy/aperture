@@ -7,7 +7,8 @@
 #   4. reset the demo DB and restart the dev server, recording into the main-task record
 #   5. write <base>/<repo>/switched; the study logger then closes the warm-up's editors, opens the
 #      main TASK-README.md and restarts the tool on the right
-# Safe to rerun if it stops partway.
+#   6. print the code word the study site asks for ($STUDY_CODE_NEXT, from devcontainer.json)
+# Safe to rerun if it stops partway; after it finished, a rerun only prints the code word again.
 set -euo pipefail
 . /opt/study/bin/study-lib.sh
 die() { echo; echo "ERROR: $*" >&2; echo "Please tell the facilitator." >&2; exit 1; }
@@ -15,7 +16,17 @@ die() { echo; echo "ERROR: $*" >&2; echo "Please tell the facilitator." >&2; exi
 repo=$(repo_root); cd "$repo"
 name=$(basename "$repo")
 dir=$(study_base)/$name
-[ "$(repo_phase "$name")" = warmup ] || die "this codespace is already on the main task."
+show_code() {
+  if [ -n "${STUDY_CODE_NEXT:-}" ]; then
+    echo; echo "Your code for the study site is:  ${STUDY_CODE_NEXT^^}"
+  fi
+}
+case "$(repo_phase "$name")" in
+  warmup) ;;
+  main) if [ -f "$dir/switched" ]; then echo "The main task is already set up."; show_code; exit 0; fi
+        die "this codespace is already on the main task." ;;
+  *) die "this codespace has already been submitted." ;;
+esac
 
 cur=$(git branch --show-current)
 if [ "$cur" = study-warmup ]; then
@@ -46,3 +57,4 @@ echo
 echo "The main task is ready. Its instructions are in TASK-README.md, and the coding assistant is"
 echo "restarting on the right. Your warm-up has been saved."
 date -Is > "$dir/switched"
+show_code
