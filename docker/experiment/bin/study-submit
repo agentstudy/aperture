@@ -6,7 +6,7 @@
 #   2. only once both pushes succeeded: reset the codespace so the work is no longer on screen. The tree
 #      goes back to the main task's starting commit, both phase records (the chat history) move to
 #      <base>/<repo>/.submitted/<id>/, the demo DB is reset and the dev server restarts
-#   3. write <base>/<repo>/submitted; the study logger then closes the editors and the tool terminal
+#   3. write <base>/<repo>/submit-done; the study logger then closes the editors and the tool terminal
 #   4. print the code word the study site asks for ($STUDY_CODE_SUBMIT, from devcontainer.json)
 # Running it again after a successful submit only prints the code word again.
 set -euo pipefail
@@ -58,5 +58,5 @@ done
 echo submitted > "$dir/phase"
 make reset-db >/dev/null 2>&1 || true
 /opt/study/bin/study-start
-date -Is > "$dir/submitted"
+date -Is > "$dir/submit-done"
 show_code

@@ -3,7 +3,7 @@
 // Writes <record>/vscode-events.jsonl, where <record> is /workspaces/.study/<repo>/<phase> and phase
 // is warmup or main (as in study-lib.sh). When study-next writes <repo dir>/switched, the logger moves
 // to the main-task record and resets the window for the main task (see switchToMain). When study-submit
-// writes <repo dir>/submitted, it closes the editors and the tool terminal and stops logging. One JSON object per line: {ts, ev, ...}. No file contents, no line ranges,
+// writes <repo dir>/submit-done, it closes the editors and the tool terminal and stops logging. One JSON object per line: {ts, ev, ...}. No file contents, no line ranges,
 // no keystrokes. The events:
 //   logger.activate          every window load (so reloads are visible)
 //   file.open   {path, tab: new|existing, via?: definition}
@@ -251,7 +251,7 @@ function activate(context) {
     context.subscriptions.push({ dispose: () => clearInterval(timer) })
   }
   {
-    const marker = path.join(repoDir, "submitted")
+    const marker = path.join(repoDir, "submit-done")
     const timer = setInterval(
       safe(() => {
         if (fs.existsSync(marker)) {

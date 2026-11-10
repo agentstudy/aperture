@@ -5,7 +5,7 @@
 #   <base>/<repo>/warmup/, main/  one record per phase: session.env, tool data (transcript DB), logs
 #   <base>/<repo>/.layout-done    the study logger's first-start layout ran
 #   <base>/<repo>/switched        written by study-next when the main task is ready
-#   <base>/<repo>/submitted       written by study-submit after a successful push and reset
+#   <base>/<repo>/submit-done     written by study-submit after a successful push and reset
 #   <base>/<repo>/.submitted/<id>/  the phase records, moved there by study-submit (already pushed)
 repo_root() { git rev-parse --show-toplevel 2>/dev/null || pwd; }
 study_base() {
