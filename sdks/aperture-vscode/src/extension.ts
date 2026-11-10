@@ -26,6 +26,11 @@ import { ApertureTree, type Node } from "./tree"
 
 const REPAINT_DEBOUNCE_MS = 150
 const RECONNECT_DELAY_MS = 2000
+// A request sent while the server is still starting can be accepted and then never answered. Without
+// a limit, that one request leaves `repainting` / `fetchingFacetMap` set forever, every later poll is
+// skipped, and only a window reload recovers. One-shot requests give up after this long; the event
+// stream gets the same limit for its response headers only.
+const REQUEST_TIMEOUT_MS = 10_000
 // Low-frequency self-heal poll, mirroring the TUI's REFRESH_POLL_MS. Repaints are
 // normally pushed via the aperture.invalidated SSE event, but a missed/dropped event
 // (or a paint that lands between two editor changes) would otherwise leave stale
@@ -151,6 +156,7 @@ export function activate(context: vscode.ExtensionContext) {
     if (!dir) return []
     const res = await fetch(`${baseUrl()}/aperture/lines?path=${encodeURIComponent(relPath)}`, {
       headers: { "x-opencode-directory": dir },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     })
     if (!res.ok) return []
     const data = (await res.json()) as { tags?: LineTag[] }
@@ -264,7 +270,10 @@ export function activate(context: vscode.ExtensionContext) {
     if (!dir) return
     fetchingFacetMap = true
     try {
-      const res = await fetch(`${baseUrl()}/aperture/facets`, { headers: { "x-opencode-directory": dir } })
+      const res = await fetch(`${baseUrl()}/aperture/facets`, {
+        headers: { "x-opencode-directory": dir },
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      })
       if (!res.ok) return
       const raw = await res.text()
       // The common case by far: the poll ticked and nothing has been repainted since. Bailing
@@ -547,6 +556,7 @@ export function activate(context: vscode.ExtensionContext) {
         method: "POST",
         headers: { "x-opencode-directory": dir, "Content-Type": "application/json" },
         body: JSON.stringify({ facets }),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       })
     } catch (e) {
       // The local paint stands. The next facet-map fetch reconciles us with whatever the
@@ -636,11 +646,13 @@ export function activate(context: vscode.ExtensionContext) {
           continue
         }
         controller = new AbortController()
+        const connecting = controller
+        const headersTimer = setTimeout(() => connecting.abort(), REQUEST_TIMEOUT_MS)
         try {
           const res = await fetch(`${baseUrl()}/event`, {
             headers: { "x-opencode-directory": dir, accept: "text/event-stream" },
             signal: controller.signal,
-          })
+          }).finally(() => clearTimeout(headersTimer))
           if (!res.ok || !res.body) {
             await delay(RECONNECT_DELAY_MS)
             continue
