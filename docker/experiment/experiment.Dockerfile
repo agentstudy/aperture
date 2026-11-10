@@ -48,7 +48,9 @@ USER vscode
 RUN npx -y "playwright@${PLAYWRIGHT_VERSION}" install chromium && rm -rf /home/vscode/.npm
 # Extensions go straight into the server's extension folder, so the first window loads them with no
 # reload. study-attach installs them the usual way if VS Code did not pick these up.
-RUN /opt/study/bin/study-unpack-vsix /opt/study/study-logger.vsix \
+RUN mkdir -p /home/vscode/.config/vscode-dev-containers \
+ && touch /home/vscode/.config/vscode-dev-containers/first-run-notice-already-displayed \
+ && /opt/study/bin/study-unpack-vsix /opt/study/study-logger.vsix \
       "/home/vscode/.vscode-remote/extensions/$(cat /opt/study/study-logger.id)"
 RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}"
 ENV PATH="/home/vscode/.bun/bin:${PATH}"

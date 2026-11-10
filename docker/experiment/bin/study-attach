@@ -27,4 +27,5 @@ install() { # <vsix> <publisher.name-version>
 
 install /opt/study/study-logger.vsix "$(cat /opt/study/study-logger.id)"
 [ "$TOOL" = aperture ] && install /opt/tool/aperture.vsix sst-dev.aperture-0.0.1
+echo "done $(date -Is)" >> "$TRACE"   # the logger waits for this before laying out the window
 exit 0

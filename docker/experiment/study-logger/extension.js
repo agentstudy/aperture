@@ -42,6 +42,9 @@ function safe(fn) {
   }
 }
 
+// Shell integration reports the command as drawn on screen: line wraps become newlines, and after a
+// reload it can include the whole scrollback.
+const cleanCmd = (s) => String(s || "").replace(/[\r\n]/g, "").slice(0, 200)
 const rel = (uri) => (root && uri.fsPath.startsWith(root + path.sep) ? path.relative(root, uri.fsPath) : uri.fsPath)
 const inRepo = (uri) => uri && uri.scheme === "file" && root && uri.fsPath.startsWith(root + path.sep)
 
@@ -76,10 +79,11 @@ function codeActivity(uri) {
 
 // ---- definition: only lookups that actually jumped ------------------------------------------
 let pendingDef // {t, file, symbol}
+let lastRefT = 0
 function takeDef() {
   const d = pendingDef
   pendingDef = undefined
-  return d && now() - d.t < 3000 ? d : undefined
+  return d && now() - d.t < 3000 && now() - lastRefT > 1000 ? d : undefined
 }
 function symbolAt(doc, pos) {
   const r = doc.getWordRangeAtPosition(pos)
@@ -95,11 +99,37 @@ function readTool() {
     return "opencode"
   }
 }
+// Codespaces runs the postAttach hook in its own terminal ("Codespaces: ..."), which would otherwise
+// cover ours. Resolved when that hook ends, or after a timeout if it never shows up.
+let hookDone
+const hookFinished = new Promise((r) => (hookDone = r))
+const isHook = (t) => /^Codespaces:/.test(t.name)
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const PANEL_WIDEN_STEPS = 7 // each step is a fixed number of pixels; tune for the study screens
+
 async function firstStartLayout() {
   const marker = path.join(record, ".layout-done")
   if (fs.existsSync(marker)) return
   fs.writeFileSync(marker, new Date().toISOString())
   const tool = readTool()
+  // A terminal created before the Python extensions finish contributing their environment shows a
+  // "relaunch terminal" warning, so start ours after they are active and after the hook is done.
+  const ready = ["ms-python.python", "ms-python.debugpy"].map((id) => {
+    const e = vscode.extensions.getExtension(id)
+    return e ? Promise.resolve(e.activate()).catch(() => {}) : Promise.resolve()
+  })
+  // The hook may also have finished before this window's logger started: study-attach writes "done".
+  const started = now()
+  const traceDone = (async () => {
+    for (let i = 0; i < 90; i++) {
+      try {
+        const f = path.join(require("os").homedir(), ".study-attach-path")
+        if (/^done /m.test(fs.readFileSync(f, "utf8")) && fs.statSync(f).mtimeMs > started - 120000) return
+      } catch {}
+      await sleep(500)
+    }
+  })()
+  await Promise.race([Promise.all([...ready, Promise.race([hookFinished, traceDone])]), sleep(45000)])
   const view = tool === "aperture" ? "workbench.view.extension.aperture" : "workbench.view.explorer"
   // Aperture's view container exists only once its extension has registered; give it a while.
   let shown = false
@@ -111,12 +141,28 @@ async function firstStartLayout() {
       await new Promise((r) => setTimeout(r, 1000))
     }
   }
-  try {
-    await vscode.commands.executeCommand("workbench.action.positionPanelRight")
-  } catch {}
-  const term = vscode.window.createTerminal({ name: tool === "aperture" ? "Aperture" : "OpenCode", cwd: root })
+  for (const t of vscode.window.terminals) if (isHook(t)) t.dispose()
+  for (const cmd of ["workbench.action.closeAuxiliaryBar", "workbench.action.positionPanelRight"]) {
+    try {
+      await vscode.commands.executeCommand(cmd)
+    } catch {}
+  }
+  // The tool is the terminal's own process, so nothing is typed into a shell (and nothing can be
+  // typed into the tool by other extensions). When it exits, the terminal becomes a normal shell.
+  const term = vscode.window.createTerminal({
+    name: tool === "aperture" ? "Aperture" : "OpenCode",
+    cwd: root,
+    shellPath: "/bin/bash",
+    shellArgs: ["-lc", `${tool}; exec bash -l`],
+  })
   term.show(false)
-  term.sendText(tool)
+  await sleep(800)
+  for (let i = 0; i < PANEL_WIDEN_STEPS; i++) {
+    try {
+      await vscode.commands.executeCommand("workbench.action.increaseViewWidth")
+    } catch {}
+  }
+  term.show(false)
   log("layout", { tool, view, viewShown: shown })
 }
 
@@ -172,7 +218,7 @@ function activate(context) {
             log("diff.open", { path: rel(t.input.modified), source: o.scheme === "git" ? "scm" : o.scheme })
           }
         }
-        if (e.closed.length) knownTabs = tabPaths()
+        for (const t of e.closed) if (t.input instanceof vscode.TabInputText) knownTabs.delete(t.input.uri.fsPath)
       }),
     ),
   )
@@ -237,6 +283,7 @@ function activate(context) {
         if (now() - lastRef.t > 2000 || key !== lastRef.key)
           log("references", { file: rel(doc.uri), symbol: symbolAt(doc, pos) })
         lastRef = { t: now(), key }
+        lastRefT = now()
         return undefined
       }),
     }),
@@ -256,27 +303,41 @@ function activate(context) {
   if (vscode.window.onDidStartTerminalShellExecution) {
     sub(
       vscode.window.onDidStartTerminalShellExecution(
-        safe((e) => log("terminal.command", { terminal: e.terminal.name, cmd: e.execution.commandLine.value })),
+        safe((e) => log("terminal.command", { terminal: e.terminal.name, cmd: cleanCmd(e.execution.commandLine.value) })),
       ),
     )
     sub(
       vscode.window.onDidEndTerminalShellExecution(
-        safe((e) =>
-          log("terminal.command.end", { terminal: e.terminal.name, cmd: e.execution.commandLine.value, exit: e.exitCode }),
-        ),
+        safe((e) => {
+          log("terminal.command.end", { terminal: e.terminal.name, cmd: cleanCmd(e.execution.commandLine.value), exit: e.exitCode })
+          if (isHook(e.terminal)) hookDone()
+        }),
       ),
     )
   }
 
   // Window focus: leaving VS Code usually means the app tab or the notepad.
-  let focused = vscode.window.state.focused
+  // A blur counts only if it lasts a second: the browser flickers focus when moving between frames.
+  let logged = vscode.window.state.focused
+  let blurTimer
   sub(
     vscode.window.onDidChangeWindowState(
       safe((s) => {
-        if (s.focused === focused) return
-        focused = s.focused
-        log(s.focused ? "window.focus" : "window.blur")
-        if (!s.focused) writeSide("away")
+        clearTimeout(blurTimer)
+        if (s.focused) {
+          if (!logged) log("window.focus")
+          logged = true
+          return
+        }
+        blurTimer = setTimeout(
+          safe(() => {
+            if (vscode.window.state.focused || !logged) return
+            logged = false
+            log("window.blur")
+            writeSide("away")
+          }),
+          1000,
+        )
       }),
     ),
   )
