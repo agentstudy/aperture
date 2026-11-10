@@ -12,7 +12,7 @@ on:
       aperture_sha:
         description: "Full Aperture commit"
         required: true
-        default: a62f672b0d6701bb00ed79fd9916776f73325802
+        default: d91560ad549c9b6c1238e1a06745ad03c12ad89b
       opencode_sha:
         description: "Full pristine OpenCode commit"
         required: true
@@ -23,7 +23,7 @@ permissions:
   packages: write
 
 env:
-  IMAGE: ghcr.io/aperture-study/aperture-study
+  IMAGE: ghcr.io/agentstudy/study-env
 
 jobs:
   build:

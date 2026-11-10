@@ -5,7 +5,7 @@
   "version": "0.3.0",
   "publisher": "study",
   "license": "UNLICENSED",
-  "repository": { "type": "git", "url": "https://github.com/aperture-study/aperture" },
+  "repository": { "type": "git", "url": "https://github.com/agentstudy/aperture" },
   "engines": { "vscode": "^1.93.0" },
   "extensionKind": ["workspace"],
   "activationEvents": ["onStartupFinished"],

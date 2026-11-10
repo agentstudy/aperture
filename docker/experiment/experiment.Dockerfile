@@ -63,7 +63,7 @@ USER root
 RUN ln -s /opt/study/bin/study-tool /usr/local/bin/aperture
 USER vscode
 RUN test -n "${APERTURE_SHA}" \
- && cd /opt/tool && git init -q && git remote add origin https://github.com/aperture-study/aperture \
+ && cd /opt/tool && git init -q && git remote add origin https://github.com/agentstudy/aperture \
  && git fetch -q --depth 1 origin "${APERTURE_SHA}" && git checkout -q FETCH_HEAD \
  && bun install \
  && cd sdks/aperture-vscode && bun install && bash package-vsix.sh \
@@ -79,7 +79,7 @@ USER root
 RUN ln -s /opt/study/bin/study-tool /usr/local/bin/opencode
 USER vscode
 RUN test -n "${OPENCODE_SHA}" \
- && cd /opt/tool && git init -q && git remote add origin https://github.com/aperture-study/aperture \
+ && cd /opt/tool && git init -q && git remote add origin https://github.com/agentstudy/aperture \
  && git fetch -q --depth 1 origin "${OPENCODE_SHA}" && git checkout -q FETCH_HEAD \
  && bun install \
  && printf 'TOOL=opencode\nTOOL_COMMIT=%s\n' "${OPENCODE_SHA}" > /opt/tool/tool.env
